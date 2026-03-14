@@ -1222,6 +1222,7 @@ class OrderController extends Controller
             $totalMonths = [];
             $includedMonths = [];
             $eligibleMonths = [];
+            $processedMonths = [];   // ✅ ADD THIS
             
             // Convert to array for faster processing
             $monthsData = $monthlyConsumptions->toArray();

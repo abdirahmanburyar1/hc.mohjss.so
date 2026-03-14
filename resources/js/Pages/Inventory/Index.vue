@@ -220,45 +220,29 @@ const formatDate = (date) => {
 
 // Helpers
 function getTotalQuantity(inventory) {
-    if (!inventory?.inventories || !Array.isArray(inventory.inventories)) {
+    if (!inventory?.items || !Array.isArray(inventory.items)) {
         return 0;
     }
 
-    const total = inventory.inventories.reduce((sum, facilityInventory) => {
-        if (!facilityInventory?.items || !Array.isArray(facilityInventory.items)) {
-            return sum;
+    const total = inventory.items.reduce((sum, item) => {
+        // Ensure proper numeric conversion
+        let quantity = 0;
+
+        if (item.quantity !== null && item.quantity !== undefined) {
+            const num = Number(item.quantity);
+
+            // Handle invalid numbers
+            if (isNaN(num) || !isFinite(num)) {
+                quantity = 0;
+            } else if (num < 0) {
+                quantity = 0;
+            } else {
+                quantity = num;
+            }
         }
 
-        const facilityTotal = facilityInventory.items.reduce((facilitySum, item) => {
-            // Ensure proper numeric conversion for sorting
-            let quantity = 0;
-
-            if (item.quantity !== null && item.quantity !== undefined) {
-                const num = Number(item.quantity);
-
-                // Handle invalid numbers
-                if (isNaN(num) || !isFinite(num)) {
-                    console.warn(`Invalid quantity for item ${item.id}: ${item.quantity}, treating as 0`);
-                    quantity = 0;
-                } else if (num < 0) {
-                    console.warn(`Negative quantity for item ${item.id}: ${num}, treating as 0`);
-                    quantity = 0;
-                } else {
-                    quantity = num;
-                }
-            }
-
-            return facilitySum + quantity;
-        }, 0);
-
-        return sum + facilityTotal;
+        return sum + quantity;
     }, 0);
-
-    // Final validation
-    if (isNaN(total) || !isFinite(total)) {
-        console.warn(`Invalid total quantity calculated: ${total}, returning 0`);
-        return 0;
-    }
 
     return total;
 }
@@ -604,29 +588,29 @@ onUnmounted(() => {
                                 </template>
                                 <template v-else v-for="inventory in props.inventories.data" :key="inventory.id">
                                     <!-- Show all products, but handle 0-quantity items differently -->
-                                    <template v-if="inventory.inventories && inventory.inventories.length > 0">
+                                    <template v-if="inventory.items && inventory.items.length > 0">
                                         <!-- Show all items including 0 quantity -->
-                                        <tr v-for="(item, itemIndex) in inventory.inventories.flatMap(inv => inv.items)"
+                                        <tr v-for="(item, itemIndex) in inventory.items"
                                             :key="`${inventory.id}-${item.id}`"
                                             class="hover:bg-gray-50 transition-colors duration-150 border-b items-center"
                                             style="border-bottom: 1px solid #B7C6E6;">
                                             <!-- Item Name - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
-                                                :rowspan="inventory.inventories.flatMap(inv => inv.items).length"
+                                                :rowspan="inventory.items.length"
                                                 class="px-3 py-2 text-xs font-medium text-gray-800 align-middle items-center">
                                                 {{ inventory.name }}</td>
 
                                             <!-- Category - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
-                                                :rowspan="inventory.inventories.flatMap(inv => inv.items).length"
+                                                :rowspan="inventory.items.length"
                                                 class="px-3 py-2 text-xs text-gray-700 align-middle items-center">{{
                                                     inventory.category?.name }}</td>
 
                                             <!-- UoM - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
-                                                :rowspan="inventory.inventories.flatMap(inv => inv.items).length"
+                                                :rowspan="inventory.items.length"
                                                 class="px-3 py-2 text-xs text-gray-700 align-middle items-center">{{
-                                                    inventory.inventories.flatMap(inv => inv.items)[0]?.uom || 'No UoM'}}
+                                                    inventory.items[0]?.uom || 'No UoM'}}
                                             </td>
 
                                             <!-- QTY -->
@@ -647,7 +631,7 @@ onUnmounted(() => {
 
                                             <!-- Total QTY on Hand - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
-                                                :rowspan="inventory.inventories.flatMap(inv => inv.items).length"
+                                                :rowspan="inventory.items.length"
                                                 class="px-3 py-2 text-xs text-gray-800 align-middle items-center">
                                                 <div class="flex items-center justify-center">
                                                     <span class="font-medium text-lg">{{
@@ -657,7 +641,7 @@ onUnmounted(() => {
 
                                             <!-- Status - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
-                                                :rowspan="inventory.inventories.flatMap(inv => inv.items).length"
+                                                :rowspan="inventory.items.length"
                                                 class="px-3 py-2 text-xs text-gray-800 text-center align-middle">
                                                 <div class="flex items-center justify-center space-x-2 w-full">
                                                     <!-- Main status icon -->
@@ -715,7 +699,7 @@ onUnmounted(() => {
 
                                             <!-- Reorder Level - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
-                                                :rowspan="inventory.inventories.flatMap(inv => inv.items).length"
+                                                :rowspan="inventory.items.length"
                                                 class="px-3 py-2 text-xs text-gray-800 align-middle items-center">
                                                 <div class="flex flex-col items-center space-y-1">
                                                     <div class="font-medium">{{ formatQty(inventory.reorder_level || 0)
@@ -725,7 +709,7 @@ onUnmounted(() => {
 
                                             <!-- Actions - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
-                                                :rowspan="inventory.inventories.flatMap(inv => inv.items).length"
+                                                :rowspan="inventory.items.length"
                                                 class="px-3 py-2 text-xs text-gray-800 align-middle items-center">
                                                 <div class="flex flex-col items-center justify-center space-y-2">
                                                     <!-- Reorder Button for Low Stock, Reorder Level, and Out of Stock Items -->

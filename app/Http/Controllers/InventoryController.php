@@ -44,7 +44,7 @@ class InventoryController extends Controller
 			->with([
 				'category:id,name',
 				'dosage:id,name',
-				'inventories.items' => function($query) use ($facility) {
+				'items' => function($query) use ($facility) {
 					$query->whereHas('inventory', function($subQuery) use ($facility) {
 						$subQuery->where('facility_id', $facility->id);
 					});
@@ -104,7 +104,7 @@ class InventoryController extends Controller
 				try {
 					$filteredCollection = $allProducts->filter(function ($product) use ($statusFilter) {
 						try {
-							$totalQuantity = $product->inventories->flatMap->items->sum('quantity');
+							$totalQuantity = $product->items->sum('quantity');
 							$reorderLevel = $product->reorder_level ?? 0;
 							
 							switch ($statusFilter) {
@@ -132,7 +132,7 @@ class InventoryController extends Controller
 									
 								case 'over_stock':
 									$amc = $product->amc ?? 0;
-									return $amc > 0 && $totalQuantity > ($amc * 2);
+									return $amc > 0 && $totalQuantity > ($amc * 5);
 									
 								default:
 									return true;
@@ -183,7 +183,7 @@ class InventoryController extends Controller
 		$allProducts = Product::with([
 				'category:id,name',
 				'dosage:id,name',
-				'inventories.items' => function($query) use ($facility) {
+				'items' => function($query) use ($facility) {
 					$query->whereHas('inventory', function($subQuery) use ($facility) {
 						$subQuery->where('facility_id', $facility->id);
 					});
@@ -200,7 +200,7 @@ class InventoryController extends Controller
 		
 		// Calculate status counts using pre-calculated metrics
 		foreach ($allProducts as $product) {
-			$totalQuantity = $product->inventories->flatMap->items->sum('quantity');
+			$totalQuantity = $product->items->sum('quantity');
 			$reorderLevel = $product->reorder_level ?? 0;
 			
 			if ($totalQuantity <= 0) {
