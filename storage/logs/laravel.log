@@ -381,3 +381,4 @@
 #58 /var/www/hc.mohjss.so/vendor/laravel/framework/src/Illuminate/Foundation/Application.php(1220): Illuminate\\Foundation\\Http\\Kernel->handle()
 #59 /var/www/hc.mohjss.so/public/index.php(20): Illuminate\\Foundation\\Application->handleRequest()
 #60 {main}"} 
+[2026-03-14 21:26:56] production.INFO: Facility Tracert Items Request: {"facility_id":968,"type":"opening_balance","month":"2026-02"} 

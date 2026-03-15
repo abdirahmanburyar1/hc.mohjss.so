@@ -18,7 +18,7 @@ class Inventory extends Model
 
     public function items()
     {
-        return $this->hasMany(InventoryItem::class);
+        return $this->hasMany(FacilityInventoryItem::class);
     }
 
     public function product()

@@ -14,6 +14,7 @@ use App\Models\MonthlyConsumptionReport;
 use App\Models\MonthlyConsumptionItem;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Support\Facades\DB;
+use Carbon\Carbon;
 
 class Product extends Model
 {
@@ -227,7 +228,8 @@ class Product extends Model
     }
 
     /**
-     * Calculate AMC using the AMC service with proper 70% deviation screening
+     * Calculate AMC using Monthly Consumption Reports (Primary) 
+     * or Movement data (Fallback)
      */
     public function calculateAMC($facilityId = null)
     {
@@ -237,67 +239,155 @@ class Product extends Model
             }
             
             if (!$facilityId) {
-                return 0;
+                return [
+                    'amc' => 0,
+                    'max_amc' => 0,
+                    'months_used' => 0,
+                    'selected_months' => []
+                ];
             }
-            
+
+            // Attempt to calculate AMC using AMCService (Consumption Reports)
             $amcService = new \App\Services\AMCService();
             $result = $amcService->calculateScreenedAMC($facilityId, $this->id);
+
+            if ($result['amc'] > 0 || $result['eligible_months_count'] > 0) {
+                return [
+                    'amc' => $result['amc'],
+                    'max_amc' => $result['max_amc'],
+                    'months_used' => $result['eligible_months_count'],
+                    'selected_months' => $result['months_breakdown']
+                ];
+            }
+            
+            // Fallback to movement data if no consumption reports exist
+            $weeklyData = $this->calculateWeeklyUsageData($facilityId);
+            $totalIssued = $weeklyData['total'];
             
             return [
-                'amc' => $result['amc'],
-                'max_amc' => $result['max_amc'],
-                'months_used' => $result['eligible_months_count'],
+                'amc' => $totalIssued,
+                'max_amc' => $weeklyData['max_weekly'] * 4,
+                'months_used' => 1,
                 'selected_months' => []
             ];
             
         } catch (\Exception $e) {
-            \Log::warning("Error calculating AMC for product {$this->id}: " . $e->getMessage());
-            return 0;
+            \Log::error("Error calculating AMC for product {$this->id}: " . $e->getMessage());
+            return [
+                'amc' => 0,
+                'max_amc' => 0,
+                'months_used' => 0,
+                'selected_months' => []
+            ];
         }
     }
 
     /**
-     * Calculate buffer stock: (Max AMC - AMC) × 0.46
-     * Max AMC is the highest value from the selected months that passed screening
+     * Calculate weekly usage data for the last 28 days
+     */
+    public function calculateWeeklyUsageData($facilityId = null)
+    {
+        if (!$facilityId) {
+            $facilityId = auth()->user()->facility_id ?? null;
+        }
+
+        if (!$facilityId) {
+            return ['w1' => 0, 'w2' => 0, 'w3' => 0, 'w4' => 0, 'total' => 0, 'max_weekly' => 0];
+        }
+
+        $endDate = Carbon::now();
+        $startDate = (clone $endDate)->subDays(28);
+
+        $movements = FacilityInventoryMovement::where('facility_id', $facilityId)
+            ->where('product_id', $this->id)
+            ->where('movement_type', 'facility_issued')
+            ->whereBetween('movement_date', [$startDate->format('Y-m-d'), $endDate->format('Y-m-d')])
+            ->get();
+
+        $weeks = [
+            'w1' => 0, // Most recent week
+            'w2' => 0,
+            'w3' => 0,
+            'w4' => 0,
+        ];
+
+        foreach ($movements as $movement) {
+            $date = Carbon::parse($movement->movement_date);
+            $daysAgo = $date->diffInDays($endDate);
+
+            if ($daysAgo < 7) {
+                $weeks['w1'] += $movement->facility_issued_quantity;
+            } elseif ($daysAgo < 14) {
+                $weeks['w2'] += $movement->facility_issued_quantity;
+            } elseif ($daysAgo < 21) {
+                $weeks['w3'] += $movement->facility_issued_quantity;
+            } elseif ($daysAgo < 28) {
+                $weeks['w4'] += $movement->facility_issued_quantity;
+            }
+        }
+
+        $weeks['total'] = array_sum($weeks);
+        $weeks['max_weekly'] = max($weeks['w1'], $weeks['w2'], $weeks['w3'], $weeks['w4']);
+
+        return $weeks;
+    }
+
+    /**
+     * Calculate buffer stock (Safety Stock) using Facility formula:
+     * [(MAX Weekly Usage / 7) * Max Lead Time] - (Average Daily Usage * Average Lead Time)
+     * Default Lead Times: Avg = 15 days, Max = 20 days
      */
     public function calculateBufferStock($facilityId = null)
     {
         try {
+            $weeklyData = $this->calculateWeeklyUsageData($facilityId);
             $amcData = $this->calculateAMC($facilityId);
-            if (!$amcData || $amcData['amc'] == 0) {
-                return 0;
-            }
-
-            $amc = $amcData['amc'];
-            $maxAMC = $amcData['max_amc'];
             
-            // Calculate buffer stock: (Max AMC - AMC) × 0.46
-            $bufferStock = ($maxAMC - $amc) * 0.46;
-            return round(max(0, $bufferStock), 2);
+            $amc = is_array($amcData) ? $amcData['amc'] : 0;
+            
+            $avgDailyUsage = $amc / 30;
+            $maxWeeklyUsage = $weeklyData['max_weekly'];
+            $maxDailyFromWeekly = $maxWeeklyUsage / 7;
+            
+            $avgLeadTime = 15;
+            $maxLeadTime = 20;
+
+            // Formula: [(MAX Weekly Usage/7) X Max Lead Time] - (Average Daily Usage X Average Lead Time)
+            $safetyStock = ($maxDailyFromWeekly * $maxLeadTime) - ($avgDailyUsage * $avgLeadTime);
+            
+            return round(max(0, $safetyStock), 2);
             
         } catch (\Exception $e) {
+            \Log::error("Error calculating safety stock for product {$this->id}: " . $e->getMessage());
             return 0;
         }
     }
 
     /**
-     * Calculate reorder level: (AMC × 0.46) + Buffer Stock
+     * Calculate reorder level using Facility formula:
+     * (Average Daily Usage * Average Lead Time) + Safety Stock
      */
     public function calculateReorderLevel($facilityId = null)
     {
         try {
-            $amc = $this->calculateAMC($facilityId);
+            $amcData = $this->calculateAMC($facilityId);
+            $amc = is_array($amcData) ? $amcData['amc'] : 0;
+            
             if ($amc == 0) {
                 return 0;
             }
             
-            $bufferStock = $this->calculateBufferStock($facilityId);
+            $avgDailyUsage = $amc / 30;
+            $avgLeadTime = 15;
+            $safetyStock = $this->calculateBufferStock($facilityId);
             
-            // Calculate reorder level: (AMC × 0.46) + Buffer Stock
-            $reorderLevel = ($amc * 0.46) + $bufferStock;
+            // Formula: (Average Daily Usage x Average Lead Time in Days) + Safety Stock
+            $reorderLevel = ($avgDailyUsage * $avgLeadTime) + $safetyStock;
+            
             return round($reorderLevel, 2);
             
         } catch (\Exception $e) {
+            \Log::error("Error calculating reorder level for product {$this->id}: " . $e->getMessage());
             return 0;
         }
     }
@@ -309,45 +399,30 @@ class Product extends Model
     public function calculateInventoryMetrics($facilityId = null)
     {
         try {
-            // Use the calculateAMC method with proper 70% deviation screening
-            $amcData = $this->calculateAMC($facilityId);
-            
-            if (is_array($amcData) && isset($amcData['amc']) && $amcData['amc'] > 0) {
-                $amc = $amcData['amc'];
-                $maxAmc = $amcData['max_amc'];
-                
-                // Calculate buffer stock: (Max AMC - AMC) × 0.46
-                $bufferStock = round(($maxAmc - $amc) * 0.46, 2);
-                
-                // Calculate reorder level: (AMC × 0.46) + Buffer Stock
-                $reorderLevel = ($amc * 0.46) + $bufferStock;
-                $reorderLevel = round($reorderLevel, 2);
-                
-                return [
-                    'amc' => $amc,
-                    'buffer_stock' => $bufferStock,
-                    'reorder_level' => $reorderLevel
-                ];
-            } else {
-                // Fallback if calculateAMC returns 0 or invalid data
-                $fallbackReorderLevel = $this->calculateFallbackReorderLevel($facilityId);
-                
-                return [
-                    'amc' => 0,
-                    'buffer_stock' => 0,
-                    'reorder_level' => $fallbackReorderLevel
-                ];
+            if (!$facilityId) {
+                $facilityId = auth()->user()->facility_id ?? null;
             }
+            
+            $amcData = $this->calculateAMC($facilityId);
+            $amc = is_array($amcData) ? ($amcData['amc'] ?? 0) : 0;
+            
+            // Safety stock and reorder level should follow the same AMC logic
+            $safetyStock = $this->calculateBufferStock($facilityId);
+            $reorderLevel = $this->calculateReorderLevel($facilityId);
+            
+            return [
+                'amc' => $amc,
+                'buffer_stock' => $safetyStock,
+                'reorder_level' => $reorderLevel
+            ];
 
         } catch (\Exception $e) {
             \Log::error("Error calculating inventory metrics for product {$this->id}: " . $e->getMessage());
             
-            $fallbackReorderLevel = $this->calculateFallbackReorderLevel($facilityId);
-            
             return [
                 'amc' => 0,
                 'buffer_stock' => 0,
-                'reorder_level' => $fallbackReorderLevel
+                'reorder_level' => 0
             ];
         }
     }
@@ -373,21 +448,20 @@ class Product extends Model
         // Check if completely out of stock first
         if ($totalQuantity <= 0) {
             $status = 'out_of_stock';
+        } elseif ($amc > 0 && $totalQuantity > ($amc * 5)) {
+            // Over-stock for Facility is > AMC × 5
+            $status = 'over_stock';
         } elseif ($reorderLevel <= 0) {
-            // No reorder level set, default to in stock
             $status = 'in_stock';
         } else {
-            // Calculate the low stock threshold (reorder level + 30%)
-            $lowStockThreshold = $reorderLevel * 1.3;
+            // Critical Threshold = Reorder Level – 30%
+            $criticalThreshold = $reorderLevel * 0.7;
             
-            if ($totalQuantity <= $reorderLevel) {
-                // Items at or below reorder level (1 to 9,000 in your example)
-                $status = 'low_stock_reorder_level';
-            } elseif ($totalQuantity <= $lowStockThreshold) {
-                // Items between reorder level and reorder level + 30% (9,001 to 11,700 in your example)
+            if ($totalQuantity <= $criticalThreshold) {
                 $status = 'low_stock';
+            } elseif ($totalQuantity <= $reorderLevel) {
+                $status = 'reorder_level';
             } else {
-                // Items above reorder level + 30% (above 11,700 in your example)
                 $status = 'in_stock';
             }
         }

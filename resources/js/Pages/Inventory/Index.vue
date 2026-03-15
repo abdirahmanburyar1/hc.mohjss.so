@@ -254,29 +254,27 @@ const getInventoryStatus = (inventory) => {
     const amc = Number(inventory.amc) || 0;
 
     // Check if completely out of stock
-    if (totalQuantity === 0) {
+    if (totalQuantity <= 0) {
         return 'out_of_stock';
     }
 
+    if (amc > 0 && totalQuantity > (amc * 5)) {
+        // Over-stock for Facility is > AMC × 5
+        return 'over_stock';
+    }
+
     if (reorderLevel <= 0) {
-        // No reorder level set, default to in stock
         return 'in_stock';
     }
 
-    // Calculate the low stock threshold (reorder level + 30%)
-    const lowStockThreshold = reorderLevel * 1.3;
+    // Critical Threshold = Reorder Level – 30%
+    const criticalThreshold = reorderLevel * 0.7;
 
-    if (totalQuantity > 0 && totalQuantity <= reorderLevel) {
-        // Items at or below reorder level (critical)
-        return 'low_stock_reorder_level';
-    } else if (totalQuantity > reorderLevel && totalQuantity <= lowStockThreshold) {
-        // Items between reorder level and reorder level + 30% (low stock)
+    if (totalQuantity <= criticalThreshold) {
         return 'low_stock';
-    } else if (amc > 0 && totalQuantity > (amc * 2)) {
-        // Over stock if quantity > AMC * 2
-        return 'over_stock';
+    } else if (totalQuantity <= reorderLevel) {
+        return 'reorder_level';
     } else {
-        // Items above reorder level + 30% (in stock)
         return 'in_stock';
     }
 };
@@ -284,7 +282,7 @@ const getInventoryStatus = (inventory) => {
 // Needs reorder: use new status logic
 function needsReorder(inventory) {
     const status = getInventoryStatus(inventory);
-    return status === 'low_stock_reorder_level' || status === 'low_stock' || status === 'out_of_stock';
+    return status === 'reorder_level' || status === 'out_of_stock' || status === 'low_stock';
 }
 
 // Computed properties for inventory status counts - from backend data (not paginated)
@@ -300,11 +298,12 @@ const lowStockCount = computed(() => {
     return stat ? stat.count : 0;
 });
 
-const lowStockReorderLevelCount = computed(() => {
+const reorderLevelCount = computed(() => {
     if (!props.inventoryStatusCounts || !Array.isArray(props.inventoryStatusCounts)) return 0;
-    const stat = props.inventoryStatusCounts.find(s => s.status === 'low_stock_reorder_level');
+    const stat = props.inventoryStatusCounts.find(s => s.status === 'reorder_level');
     return stat ? stat.count : 0;
 });
+
 
 const outOfStockCount = computed(() => {
     if (!props.inventoryStatusCounts || !Array.isArray(props.inventoryStatusCounts)) return 0;
@@ -318,13 +317,7 @@ const overStockCount = computed(() => {
     return stat ? stat.count : 0;
 });
 
-// Combined count for debugging - shows both old and new status names
-const combinedReorderLevelCount = computed(() => {
-    if (!props.inventoryStatusCounts || !Array.isArray(props.inventoryStatusCounts)) return 0;
-    // Just return the low_stock_reorder_level count (no need to double it)
-    const lowStockReorderLevel = props.inventoryStatusCounts.find(s => s.status === 'low_stock_reorder_level')?.count || 0;
-    return lowStockReorderLevel;
-});
+
 
 function getResults(page = 1) {
     if (props.filters) {
@@ -386,10 +379,9 @@ onUnmounted(() => {
                         <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
                         <select v-model="status" @change="applyFilters"
                             class="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm">
-                            <option value="">All Statuses ({{ props.inventories?.data?.length || 0 }})</option>
                             <option value="in_stock">✅ In Stock ({{ inStockCount }})</option>
                             <option value="low_stock">⚠️ Low Stock ({{ lowStockCount }})</option>
-                            <option value="low_stock_reorder_level">🚨 Low Stock + Reorder Level ({{ lowStockReorderLevelCount }})</option>
+                            <option value="reorder_level">🔵 Reorder Level ({{ reorderLevelCount }})</option>
                             <option value="out_of_stock">❌ Out of Stock ({{ outOfStockCount }})</option>
                             <option value="over_stock">📈 Over Stock ({{ overStockCount }})</option>
                         </select>
@@ -431,7 +423,7 @@ onUnmounted(() => {
                         Status: {{
                             status === 'in_stock' ? 'In Stock' :
                                 status === 'low_stock' ? '⚠️ Low Stock' :
-                                    status === 'low_stock_reorder_level' ? 'Low Stock + Reorder Level' :
+                                    status === 'reorder_level' ? '🔵 Reorder Level' :
                                         status === 'out_of_stock' ? 'Out of Stock' :
                                             status === 'over_stock' ? '📈 Over Stock' :
                                                 status
@@ -672,7 +664,7 @@ onUnmounted(() => {
                                                     </div>
                                                     <div v-else-if="getInventoryStatus(inventory) === 'over_stock'"
                                                         class="flex items-center justify-center"
-                                                        title="📈 Over Stock - Quantity exceeds AMC * 2">
+                                                        title="📈 Over Stock - Quantity exceeds AMC * 5">
                                                         <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
                                                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
@@ -707,6 +699,7 @@ onUnmounted(() => {
                                                 </div>
                                             </td>
 
+
                                             <!-- Actions - only on first row for this inventory -->
                                             <td v-if="itemIndex === 0"
                                                 :rowspan="inventory.items.length"
@@ -717,7 +710,7 @@ onUnmounted(() => {
                                                         class="flex flex-col items-center">
                                                         <button
                                                             class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center border-2 border-blue-200 hover:bg-blue-200 transition-colors"
-                                                            title="Reorder - {{ getInventoryStatus(inventory) === 'low_stock' ? 'Low Stock' : getInventoryStatus(inventory) === 'low_stock_reorder_level' ? 'Low Stock + Reorder Level' : 'Out of Stock' }}">
+                                                            :title="'Reorder - ' + (getInventoryStatus(inventory) === 'low_stock' ? 'Low Stock' : 'Out of Stock')">
                                                             <svg class="w-4 h-4 text-blue-600" fill="none"
                                                                 stroke="currentColor" viewBox="0 0 24 24">
                                                                 <path stroke-linecap="round" stroke-linejoin="round"
@@ -790,35 +783,26 @@ onUnmounted(() => {
                                                     </div>
                                                     <div v-else-if="getInventoryStatus(inventory) === 'low_stock'"
                                                         class="flex items-center justify-center"
-                                                        title="⚠️ Low Stock - Reorder recommended">
+                                                        title="⚠️ Low Stock - Critical reorder needed">
                                                         <img src="/assets/images/low_stock.png" alt="Low Stock"
                                                             class="w-8 h-8 drop-shadow-sm" />
                                                     </div>
-                                                    <div v-else-if="getInventoryStatus(inventory) === 'low_stock_reorder_level'"
+                                                    <div v-else-if="getInventoryStatus(inventory) === 'reorder_level'"
                                                         class="flex items-center justify-center"
-                                                        title="Low Stock + Reorder Level - Immediate reorder needed">
-                                                        <img src="/assets/images/low_stock.png"
-                                                            alt="Low Stock + Reorder Level"
+                                                        title="Reorder Level - Action is requested">
+                                                        <img src="/assets/images/reorder_status.png"
+                                                            alt="Reorder Level"
                                                             class="w-8 h-8 drop-shadow-sm" />
                                                     </div>
                                                     <div v-else-if="getInventoryStatus(inventory) === 'out_of_stock'"
                                                         class="flex items-center justify-center"
-                                                        title="Out of Stock - Immediate reorder needed">
-                                                        <img src="/assets/images/out_stock_alert.png" alt="Out of Stock"
+                                                        title="Out of Stock - Immediate action needed">
+                                                        <img src="/assets/images/out_stock.png" alt="Out of Stock"
                                                             class="w-8 h-8 drop-shadow-sm" />
                                                     </div>
                                                     <div v-else-if="getInventoryStatus(inventory) === 'over_stock'"
                                                         class="flex items-center justify-center"
-                                                        title="📈 Over Stock - Quantity exceeds AMC * 2">
-                                                        <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
-                                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-                                                            </svg>
-                                                        </div>
-                                                    </div>
-                                                    <div v-else-if="getInventoryStatus(inventory) === 'over_stock'"
-                                                        class="flex items-center justify-center"
-                                                        title="📈 Over Stock - Quantity exceeds AMC * 2">
+                                                        title="📈 Over Stock - Quantity exceeds AMC * 5">
                                                         <div class="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
                                                             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
@@ -832,14 +816,6 @@ onUnmounted(() => {
                                                             <span class="text-xs text-gray-500">?</span>
                                                         </div>
                                                     </div>
-
-                                                    <!-- Reorder Level Icon (shows for all items that need reordering) -->
-                                                    <div v-if="needsReorder(inventory)"
-                                                        class="flex items-center justify-center"
-                                                        title="Reorder Action Required">
-                                                        <img src="/assets/images/reorder_level.png"
-                                                            alt="Reorder Required" class="w-8 h-8 drop-shadow-sm" />
-                                                    </div>
                                                 </div>
                                             </td>
 
@@ -850,6 +826,7 @@ onUnmounted(() => {
                                                         }}</div>
                                                 </div>
                                             </td>
+
 
                                             <!-- Actions -->
                                             <td class="px-3 py-2 text-xs text-gray-800 align-middle items-center">
@@ -926,14 +903,14 @@ onUnmounted(() => {
                             <div
                                 class="flex items-center rounded-lg bg-gradient-to-r from-blue-50 to-blue-100 p-3 shadow-md border border-blue-200">
                                 <div class="flex-shrink-0">
-                                    <img src="/assets/images/reorder_level.png" class="w-8 h-8 drop-shadow-sm"
-                                        alt="Reorder Level" />
+                                    <img src="/assets/images/reorder_status.png" class="w-8 h-8 drop-shadow-sm" alt="Reorder Status" />
                                 </div>
                                 <div class="ml-3 flex flex-col flex-1">
-                                    <span class="text-lg font-bold text-blue-700">{{ lowStockReorderLevelCount }}</span>
-                                    <span class="text-xs font-medium text-blue-600">Low Stock + Reorder Level</span>
+                                    <span class="text-lg font-bold text-blue-700">{{ reorderLevelCount }}</span>
+                                    <span class="text-xs font-medium text-blue-600">Reorder Level</span>
                                 </div>
                             </div>
+
 
                             <!-- Out of Stock Card -->
                             <div
@@ -996,9 +973,16 @@ onUnmounted(() => {
                         <li class="flex items-center gap-4">
                             <img src="/assets/images/low_stock.png" class="w-10 h-10" alt="Low Stock" />
                             <div>
-                                <div class="font-semibold text-orange-600">Low Stock</div>
-                                <div class="text-xs text-gray-500">Indicates items that are below the reorder level.
+                                 <div class="font-semibold text-orange-600">Low Stock</div>
+                                <div class="text-xs text-gray-500">Indicates items that are below 70% of the reorder level. (Critical)
                                 </div>
+                            </div>
+                        </li>
+                        <li class="flex items-center gap-4">
+                            <img src="/assets/images/reorder_status.png" class="w-10 h-10" alt="Reorder Status" />
+                            <div>
+                                <div class="font-semibold text-blue-600">Reorder Level</div>
+                                <div class="text-xs text-gray-500">Indicates quantity is between 0 and 100% of reorder level. Action is requested.</div>
                             </div>
                         </li>
                         <li class="flex items-center gap-4">
@@ -1010,14 +994,6 @@ onUnmounted(() => {
                             </div>
                         </li>
                         <li class="flex items-center gap-4">
-                            <img src="/assets/images/reorder_status.png" class="w-10 h-10" alt="Reorder Status" />
-                            <div>
-                                <div class="font-semibold text-blue-600">Reorder Status</div>
-                                <div class="text-xs text-gray-500">Indicates that a reorder is recommended for this
-                                    item.</div>
-                            </div>
-                        </li>
-                        <li class="flex items-center gap-4">
                             <div class="w-10 h-10 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
@@ -1025,7 +1001,7 @@ onUnmounted(() => {
                             </div>
                             <div>
                                 <div class="font-semibold text-blue-700">Over Stock</div>
-                                <div class="text-xs text-gray-500">Indicates items where quantity exceeds double the AMC.</div>
+                                <div class="text-xs text-gray-500">Indicates items where quantity exceeds AMC * 5.</div>
                             </div>
                         </li>
                     </ul>
